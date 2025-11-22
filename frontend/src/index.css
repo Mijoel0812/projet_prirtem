@@ -1,0 +1,116 @@
+/* frontend/src/index.css */
+
+/* Définition des variables de thème */
+:root {
+  /* Thème clair (par défaut) */
+  --primary: #763fee;
+  --secondary: #fff;
+  --icons: #fff;
+  --background: #f5f5f5;
+  --text-color: #333;
+  
+  font-family: "Poppins", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thème sombre */
+:root[data-theme="dark"] {
+  --primary: #763fee;
+  --secondary: #1e1e1e;
+  --icons: #fff;
+  --background: #0d0d0d;
+  --text-color: #e0e0e0;
+}
+
+/* Autre exemple de thème bleu */
+:root[data-theme="blue"] {
+  --primary: #1e90ff;
+  --secondary: #fff;
+  --icons: #fff;
+  --background: #f0f8ff;
+  --text-color: #333;
+}
+
+/* Taille de base pour rem */
+html {
+  font-size: 62.5%; /* 1rem = 10px */
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--background);
+  color: var(--text-color);
+  transition: background-color 0.3s, color 0.3s;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+
+a:hover {
+  color: #535bf2;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+
+button:hover {
+  border-color: #646cff;
+}
+
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+/* Style pour le loader */
+.App-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-size: 2rem;
+  color: var(--text-color);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  
+  a:hover {
+    color: #747bff;
+  }
+  
+  button {
+    background-color: #f9f9f9;
+    color: #213547;
+  }
+}

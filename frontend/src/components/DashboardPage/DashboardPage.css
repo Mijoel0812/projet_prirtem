@@ -1,0 +1,43 @@
+/* frontend/src/components/DashboardPage/DashboardPage.css */
+
+.dashboard-layout {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  /* La couleur de fond est maintenant gérée par :root */
+  background-color: var(--secondary);
+  transition: background-color 0.5s;
+}
+
+.dashboard-content {
+  flex-grow: 1;
+  padding: 30px;
+  overflow-y: auto;
+  position: relative; /* Nécessaire pour positionner le bouton de thème */
+}
+
+.dashboard-content h1 {
+  margin-top: 0;
+  /* Couleur de texte qui s'adapte (exemple) */
+  color: var(--primary);
+}
+
+/* Styles pour le bouton de Thème  */
+.theme-toggle {
+  position: absolute;
+  top: 1.6rem; /* Aligné avec le padding du sidebar */
+  right: 1.6rem; /* Aligné avec le padding du sidebar */
+  width: 4rem;
+  height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--primary);
+  border-radius: 1rem;
+  cursor: pointer;
+}
+
+.theme-toggle ion-icon {
+  font-size: 2.2rem;
+  color: var(--icons);
+}
