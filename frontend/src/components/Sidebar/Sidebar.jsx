@@ -11,9 +11,8 @@ const menuConfig = [
   { name: "Parametre", icon: "cog-sharp" },
 ];
 
-function Sidebar({ onLogout }) {
+function Sidebar({ onLogout, activeIndex, setActiveIndex }) {
   const [isSidebarActive, setIsSidebarActive] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
   
   const indicatorRef = useRef(null);
   const menuItemsRef = useRef([]);

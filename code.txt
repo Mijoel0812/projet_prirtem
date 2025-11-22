@@ -1,0 +1,1262 @@
+### structure du projet ###
+
+projet_prirtem/
+
+├── Backend/ (API Node.js/Express)
+│   ├── node_modules/
+│   ├── package.json                  <-- Configuration backend (Express, PostgreSQL, JWT)
+│   ├── package-lock.json
+│   ├── server.js                     <-- Point d'entrée du serveur Express
+│   ├── src/
+│   │   ├── controllers/
+│   │   │   └── authController.js     <-- Gestion de l'authentification (login, register)
+│   │   ├── db/
+│   │   │   ├── db.js                 <-- Connexion PostgreSQL
+│   │   │   └── init.sql              <-- Script SQL d'initialisation (tables users)
+│   │   ├── middleware/
+│   │   │   └── authMiddleware.js     <-- Middleware JWT pour protéger les routes
+│   │   └── routes/
+│   │       └── authRoutes.js         <-- Routes d'authentification (/api/auth)
+│
+├── frontend/ (Application React/Vite)
+│   ├── node_modules/
+│   ├── public/
+│   │   └── vite.svg
+│   ├── src/
+│   │   ├── assets/
+│   │   │   └── react.svg
+│   │   ├── components/
+│   │   │   ├── AuthForm/
+│   │   │   │   ├── AuthForm.jsx      <-- Formulaire d'authentification (Login/Register)
+│   │   │   │   └── AuthForm.css      <-- Styles du formulaire
+│   │   │   ├── DashboardPage/
+│   │   │   │   ├── DashboardPage.jsx <-- Page principale du dashboard
+│   │   │   │   └── DashboardPage.css <-- Styles du dashboard
+│   │   │   └── Sidebar/
+│   │   │       ├── Sidebar.jsx       <-- Barre latérale de navigation
+│   │   │       └── Sidebar.css       <-- Styles de la sidebar
+│   │   ├── hooks/
+│   │   │   └── useNotification.jsx   <-- Hook personnalisé pour les notifications
+│   │   ├── services/
+│   │   │   └── api.js                <-- Configuration Axios et appels API
+│   │   ├── utils/
+│   │   │   ├── constants.js          <-- Constantes de l'application
+│   │   │   └── helpers.js            <-- Fonctions utilitaires
+│   │   ├── App.jsx                   <-- Composant racine avec routage
+│   │   ├── App.css                   <-- Styles globaux de l'app
+│   │   ├── main.jsx                  <-- Point d'entrée React
+│   │   └── index.css                 <-- Styles de base
+│   ├── index.html                    <-- Template HTML
+│   ├── vite.config.js                <-- Configuration Vite
+│   ├── eslint.config.js              <-- Configuration ESLint
+│   ├── package.json                  <-- Configuration frontend (React, Vite, Axios)
+│   ├── package-lock.json
+│   └── README.md
+│
+└── README.md                          <-- Documentation du projet
+
+### init.sql ###
+
+psql -U postgres -h localhost -p 5432 -d prirtem_db
+
+-- Créez d'abord la base de données (si elle n'existe pas)
+CREATE DATABASE prirtem_db;
+
+-- Connectez-vous à la base de données 'prirtem_db' avant d'exécuter la suite
+\c prirtem_db
+
+-- Activer l'extension pour générer des UUID (meilleur pour les ID)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Créer la table des utilisateurs
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    username VARCHAR(100) NOT NULL UNIQUE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+### authController.js ###
+
+import pool from '../db/db.js';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import 'dotenv/config';
+
+// --- Inscription (Register) ---
+export const register = async (req, res) => {
+  const { username, email, password } = req.body;
+
+  try {
+    // 1. Vérifier si l'utilisateur existe déjà
+    const userExists = await pool.query("SELECT * FROM users WHERE email = $1 OR username = $2", [email, username]);
+    if (userExists.rows.length > 0) {
+      return res.status(400).json({ message: "L'email ou le nom d'utilisateur existe déjà." });
+    }
+
+    // 2. Hacher le mot de passe
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+
+    // 3. Insérer le nouvel utilisateur
+    const newUser = await pool.query(
+      "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email",
+      [username, email, password_hash]
+    );
+
+    // 4. Créer un Token JWT
+    const token = jwt.sign(
+      { id: newUser.rows[0].id },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    // 5. Renvoyer le token
+    res.status(201).json({
+      token,
+      user: newUser.rows[0]
+    });
+
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Erreur du serveur");
+  }
+};
+
+// --- Connexion (Login) ---
+export const login = async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
+    // 1. Vérifier si l'utilisateur existe
+    const user = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    if (user.rows.length === 0) {
+      return res.status(400).json({ message: "Identifiants invalides." });
+    }
+
+    // 2. Vérifier le mot de passe
+    const isMatch = await bcrypt.compare(password, user.rows[0].password_hash);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Identifiants invalides." });
+    }
+
+    // 3. Créer et renvoyer le Token JWT
+    const token = jwt.sign(
+      { id: user.rows[0].id },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.rows[0].id,
+        username: user.rows[0].username,
+        email: user.rows[0].email
+      }
+    });
+
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Erreur du serveur");
+  }
+};
+
+
+### db.js ###
+
+import pg from 'pg';
+import 'dotenv/config';
+
+const { Pool } = pg;
+
+const pool = new Pool({
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  database: process.env.DB_NAME,
+});
+
+export default pool;
+
+
+### authMiddleware.js ###
+
+// Backend/src/middleware/authMiddleware.js
+import jwt from 'jsonwebtoken';
+import 'dotenv/config';
+
+export const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer TOKEN"
+
+  if (!token) {
+    return res.status(401).json({ message: 'Token manquant' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // Ajoute les infos user à la requête
+    next();
+  } catch (err) {
+    return res.status(403).json({ message: 'Token invalide ou expiré' });
+  }
+};
+
+
+### authRoutes.js ###
+
+import { Router } from 'express';
+import { register, login } from '../controllers/authController.js';
+
+const router = Router();
+
+// @route   POST /api/auth/register
+// @desc    Enregistrer un nouvel utilisateur
+router.post('/register', register);
+
+// @route   POST /api/auth/login
+// @desc    Connecter un utilisateur et renvoyer un token
+router.post('/login', login);
+
+export default router;
+
+### .env ###
+
+PORT=3001
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=prirtem_db
+JWT_SECRET=mamynavalona-dev-junior
+NODE_ENV=development
+
+
+### server.js ###
+
+import express from 'express';
+import cors from 'cors';
+import 'dotenv/config';
+import authRoutes from './src/routes/authRoutes.js';
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// Middlewares
+app.use(cors()); // Autoriser les requêtes depuis votre frontend React
+app.use(express.json()); // Analyser le JSON des requêtes
+
+// Routes
+app.use('/api/auth', authRoutes);
+
+// Route de test
+app.get('/', (req, res) => {
+  res.send('API PRIRTEM en cours d\'exécution...');
+});
+
+app.listen(PORT, () => {
+  console.log(`Serveur démarré sur http://localhost:${PORT}`);
+});
+ 
+
+### AuthForm.jsx ###
+
+// frontend/src/components/AuthForm/AuthForm.jsx
+import React, { useState } from 'react';
+import axios from 'axios';
+import './AuthForm.css';
+
+const API_URL = 'http://localhost:3001/api/auth';
+
+function AuthForm({ onLoginSuccess }) {
+  const [isActive, setIsActive] = useState(false);
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Réinitialiser les champs lors du changement de mode
+  const resetForm = () => {
+    setUsername('');
+    setEmail('');
+    setPassword('');
+    setError('');
+  };
+
+  const handleRegisterClick = (e) => {
+    e.preventDefault();
+    resetForm();
+    setIsActive(true);
+  };
+
+  const handleLoginClick = (e) => {
+    e.preventDefault();
+    resetForm();
+    setIsActive(false);
+  };
+
+  const handleLoginSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    // Validation basique
+    if (!username.trim() || !password.trim()) {
+      setError("Veuillez remplir tous les champs");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const payload = { username, password };
+      const res = await axios.post(`${API_URL}/login`, payload);
+      localStorage.setItem('token', res.data.token);
+      onLoginSuccess();
+    } catch (err) {
+      console.error(err);
+      if (err.response?.data?.message) {
+        setError(err.response.data.message);
+      } else {
+        setError("Erreur de connexion. Vérifiez vos identifiants.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegisterSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    // Validation basique
+    if (!username.trim() || !email.trim() || !password.trim()) {
+      setError("Veuillez remplir tous les champs");
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 6) {
+      setError("Le mot de passe doit contenir au moins 6 caractères");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const payload = { username, email, password };
+      const res = await axios.post(`${API_URL}/register`, payload);
+      localStorage.setItem('token', res.data.token);
+      onLoginSuccess();
+    } catch (err) {
+      console.error(err);
+      if (err.response?.data?.message) {
+        setError(err.response.data.message);
+      } else {
+        setError("Erreur d'inscription. Veuillez réessayer.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className={isActive ? "wrapper active" : "wrapper"}>
+      <span className="rotate-bg"></span>
+      <span className="rotate-bg2"></span>
+
+      {/* SECTION CONNEXION */}
+      <div className="form-box login">
+        <h2 className="title animation" style={{ "--i": 0, "--j": 21 }}>Connexion</h2>
+        <form onSubmit={handleLoginSubmit}>
+          {error && !isActive && <p className="error-message">{error}</p>}
+          <div className="input-box animation" style={{ "--i": 1, "--j": 22 }}>
+            <input 
+              type="text" 
+              required 
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={loading}
+            />
+            <label>Nom d'utilisateur</label>
+            <i className='bx bxs-user'></i>
+          </div>
+          <div className="input-box animation" style={{ "--i": 2, "--j": 23 }}>
+            <input 
+              type="password" 
+              required 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={loading}
+            />
+            <label>Mot de passe</label>
+            <i className='bx bxs-lock-alt'></i>
+          </div>
+          <button 
+            type="submit" 
+            className="btn animation" 
+            style={{ "--i": 3, "--j": 24 }}
+            disabled={loading}
+          >
+            {loading ? 'Connexion...' : 'Connexion'}
+          </button>
+          <div className="linkTxt animation" style={{ "--i": 5, "--j": 25 }}>
+            <p>Pas encore de compte ? <a href="#" className="register-link" onClick={handleRegisterClick}>S'inscrire</a></p>
+          </div>
+        </form>
+      </div>
+      <div className="info-text login">
+        <h2 className="animation" style={{ "--i": 0, "--j": 20 }}>Bon retour !</h2>
+        <p className="animation" style={{ "--i": 1, "--j": 21 }}>
+          Connectez-vous pour accéder au tableau de bord PRIRTEM.
+        </p>
+      </div>
+
+      {/* SECTION INSCRIPTION */}
+      <div className="form-box register">
+        <h2 className="title animation" style={{ "--i": 17, "--j": 0 }}>Créer un compte</h2>
+        <form onSubmit={handleRegisterSubmit}>
+          {error && isActive && <p className="error-message">{error}</p>}
+          <div className="input-box animation" style={{ "--i": 18, "--j": 1 }}>
+            <input 
+              type="text" 
+              required 
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={loading}
+            />
+            <label>Nom d'utilisateur</label>
+            <i className='bx bxs-user'></i>
+          </div>
+          <div className="input-box animation" style={{ "--i": 19, "--j": 2 }}>
+            <input 
+              type="email" 
+              required 
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
+            />
+            <label>Email</label>
+            <i className='bx bxs-envelope'></i>
+          </div>
+          <div className="input-box animation" style={{ "--i": 20, "--j": 3 }}>
+            <input 
+              type="password" 
+              required 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={loading}
+            />
+            <label>Mot de passe</label>
+            <i className='bx bxs-lock-alt'></i>
+          </div>
+          <button 
+            type="submit" 
+            className="btn animation" 
+            style={{ "--i": 21, "--j": 4 }}
+            disabled={loading}
+          >
+            {loading ? 'Création...' : 'Créer'}
+          </button>
+          <div className="linkTxt animation" style={{ "--i": 22, "--j": 5 }}>
+            <p>Vous avez déjà un compte ? <a href="#" className="login-link" onClick={handleLoginClick}>Se connecter</a></p>
+          </div>
+        </form>
+      </div>
+      <div className="info-text register">
+        <h2 className="animation" style={{ "--i": 17, "--j": 0 }}>Bienvenue!</h2>
+        <p className="animation" style={{ "--i": 18, "--j": 1 }}>
+          Inscrivez-vous pour commencer le suivi de carburant.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export default AuthForm;
+
+
+### DashboardPage.css ###
+
+/* frontend/src/components/DashboardPage/DashboardPage.css */
+
+.dashboard-layout {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  /* La couleur de fond est maintenant gérée par :root */
+  background-color: var(--secondary);
+  transition: background-color 0.5s;
+}
+
+.dashboard-content {
+  flex-grow: 1;
+  padding: 30px;
+  overflow-y: auto;
+  position: relative; /* Nécessaire pour positionner le bouton de thème */
+}
+
+.dashboard-content h1 {
+  margin-top: 0;
+  /* Couleur de texte qui s'adapte (exemple) */
+  color: var(--primary);
+}
+
+/* Styles pour le bouton de Thème  */
+.theme-toggle {
+  position: absolute;
+  top: 1.6rem; /* Aligné avec le padding du sidebar */
+  right: 1.6rem; /* Aligné avec le padding du sidebar */
+  width: 4rem;
+  height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--primary);
+  border-radius: 1rem;
+  cursor: pointer;
+}
+
+.theme-toggle ion-icon {
+  font-size: 2.2rem;
+  color: var(--icons);
+}
+
+
+### DashboardPage.jsx ###
+
+import React from 'react';
+import Sidebar from '../Sidebar/Sidebar';
+import './DashboardPage.css';
+
+function DashboardPage({ onLogout, toggleTheme, isDarkTheme }) {
+  return (
+    <div className="dashboard-layout">
+      <Sidebar onLogout={onLogout} /> 
+      
+      {/* Classe "main" renommée en "dashboard-content" */}
+      <main className="dashboard-content">
+        
+        {/* Bouton de Thème de sidebar.txt  */}
+        <div className="theme-toggle" onClick={toggleTheme}>
+          <ion-icon name={isDarkTheme ? "sunny-sharp" : "moon-sharp"}></ion-icon>
+        </div>
+
+        <h1>Dashboard</h1>
+        <p>Bienvenue sur votre tableau de bord de gestion de carburant.</p>
+        
+      </main>
+    </div>
+  );
+}
+
+export default DashboardPage;
+
+
+### Sidebar.css ###
+
+/* frontend/src/components/Sidebar/Sidebar.css */
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700;800;900&display=swap");
+
+/* Déplacé dans App.jsx et index.css
+:root {
+  --primary: #763fee;
+  --secondary: #fff;
+  --icons: #fff;
+}
+html { font-size: 62.5%; }
+body { ... }
+*/
+
+/* Variables locales au sidebar */
+.sidebar {
+  --primary: #763fee;
+  --secondary: #fff; /* Sera écrasé par :root de App.jsx */
+  --icons: #fff;
+}
+
+.sidebar {
+  position: relative;
+  background-color: var(--primary);
+  width: 4.2rem;
+  border-radius: 2rem;
+  padding: 1rem 0 0 1rem;
+  transition: 0.5s;
+  height: calc(100vh - 3.2rem); /* 100vh moins le padding de body */
+  margin: 1.6rem; /* Ajout du padding [cite: 18] */
+  font-size: 1.6rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar.active {
+  width: 16rem;
+}
+
+.sidebar .toggle-btn {
+  position: absolute;
+  top: 2.1rem;
+  right: -1.1rem;
+  width: 2rem;
+  height: 2rem;
+  background-color: var(--primary);
+  /* Utilise la variable globale pour la bordure */
+  border: 4px solid var(--secondary); 
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icons);
+  cursor: pointer;
+  z-index: 10;
+  transition: 0.5s;
+}
+
+.sidebar.active .toggle-btn {
+  transform: rotate(180deg);
+}
+
+.sidebar .list {
+  display: flex;
+  flex-direction: column;
+  row-gap: 0rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  height: 100%;
+}
+
+.sidebar .list .item {
+  position: relative;
+  list-style: none;
+  white-space: nowrap; /* Empêche le texte de sauter à la ligne */
+}
+
+.sidebar .list .item a {
+  height: 4rem;
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  column-gap: 1rem;
+  color: var(--icons);
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar .list .item a .icon {
+  min-width: 1.8rem;
+  min-height: 1.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar .list .item a .icon ion-icon {
+  font-size: 1.1rem;
+}
+
+.sidebar .list .item a .text {
+  font-size: 1rem;
+  font-weight: 500;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transform-origin: left;
+  transform: scale(0);
+  transition: transform 0.3s;
+  transition-delay: 0s;
+}
+
+.sidebar.active .list .item a .text {
+  transform: scale(1);
+  transition-delay: 0.2s;
+}
+
+.sidebar .list .item.logo {
+  pointer-events: none;
+  margin-bottom: 0.5rem;
+}
+
+.sidebar .list .item.logo a .icon ion-icon {
+  font-size: 1.8rem;
+}
+
+.sidebar .list .item.logo a .text {
+  font-size: 2rem;
+  font-weight: 500;
+}
+
+.sidebar .list .menu-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  row-gap: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar .list .menu-list .item {
+  z-index: 1;
+  cursor: pointer;
+  margin: 0;
+}
+
+.sidebar .list .menu-list .item a {
+  transition: 0.2s;
+  transition-delay: 0.2s;
+}
+
+.sidebar .list .menu-list .item.active a {
+  color: var(--primary);
+  padding-left: 0.5rem;
+}
+
+.sidebar .list .menu-list .indicator {
+  position: absolute;
+  top: 0.5rem;
+  width: 100%;
+  height: 2.8rem;
+  background-color: var(--secondary); /* Utilise la variable globale */
+  border-radius: 30px 0 0 30px;
+  transition: transform 0.4s;
+  pointer-events: none;
+}
+
+.sidebar .list .menu-list .indicator::before,
+.sidebar .list .menu-list .indicator::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  width: 4rem;
+  height: 4rem;
+  background-color: transparent;
+  border-radius: 50%;
+}
+
+.sidebar .list .menu-list .indicator::before {
+  top: -3.1rem;
+  box-shadow: 2rem 2rem 0 var(--secondary); /* Utilise la variable globale */
+}
+
+.sidebar .list .menu-list .indicator::after {
+  bottom: -3.1rem;
+  box-shadow: 2rem -2rem 0 var(--secondary); /* Utilise la variable globale */
+}
+
+/* Style pour le bouton Déconnexion */
+.sidebar .list .logout-item {
+  margin-top: auto; /* Pousse l'item en bas */
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  padding-top: 1rem;
+  cursor: pointer;
+}
+
+.sidebar .list .logout-item a {
+  opacity: 0.8;
+  transition: opacity 0.3s;
+}
+
+.sidebar .list .logout-item:hover a {
+  opacity: 1;
+}
+
+
+### Sidebar.jsx ###
+
+// frontend/src/components/Sidebar/Sidebar.jsx
+import React, { useState, useRef, useEffect } from 'react';
+import './Sidebar.css';
+
+const menuConfig = [
+  { name: "Tableau de bord", icon: "home-sharp" },
+  { name: "Profile", icon: "person-sharp" },
+  { name: "Véhicules", icon: "chatbubble-ellipses-sharp" },
+  { name: "Chauffeurs", icon: "pie-chart-sharp" },
+  { name: "Rapports", icon: "cart-sharp" },
+  { name: "Parametre", icon: "cog-sharp" },
+];
+
+function Sidebar({ onLogout }) {
+  const [isSidebarActive, setIsSidebarActive] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  
+  const indicatorRef = useRef(null);
+  const menuItemsRef = useRef([]);
+
+  const toggleSidebar = () => {
+    setIsSidebarActive(!isSidebarActive);
+  };
+
+  // Fonction pour mettre à jour la position de l'indicateur
+  const updateIndicatorPosition = () => {
+    const item = menuItemsRef.current[activeIndex];
+    
+    if (item && indicatorRef.current) {
+      indicatorRef.current.style.transform = `translateY(${item.offsetTop}px)`;
+    }
+  };
+
+  const handleItemClick = (index) => {
+    setActiveIndex(index);
+  };
+
+  // Mettre à jour la position quand l'index actif change
+  useEffect(() => {
+    updateIndicatorPosition();
+  }, [activeIndex]);
+
+  // Mettre à jour la position quand la sidebar change d'état (toggle)
+  useEffect(() => {
+    // Petit délai pour attendre la fin de l'animation CSS
+    const timer = setTimeout(() => {
+      updateIndicatorPosition();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [isSidebarActive]);
+
+  // Positionner l'indicateur au chargement initial
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      updateIndicatorPosition();
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Recalculer la position lors du redimensionnement de la fenêtre
+  useEffect(() => {
+    const handleResize = () => {
+      updateIndicatorPosition();
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [activeIndex]);
+
+  return (
+    <aside className={isSidebarActive ? "sidebar active" : "sidebar"}>
+      <div className="toggle-btn" onClick={toggleSidebar}>
+        <ion-icon name="chevron-forward-sharp"></ion-icon>
+      </div>
+      
+      <ul className="list">
+        <li className="item logo">
+          <a href="#">
+            <div className="icon">
+              <ion-icon name="grid-sharp"></ion-icon>
+            </div>
+            <p className="text">PRIRTEM</p>
+          </a>
+        </li>
+
+        <div className="menu-list">
+          {menuConfig.map((item, index) => (
+            <li
+              key={index}
+              className={activeIndex === index ? "item active" : "item"}
+              ref={(el) => (menuItemsRef.current[index] = el)}
+              onClick={() => handleItemClick(index)}
+            >
+              <a href="#">
+                <div className="icon">
+                  <ion-icon name={item.icon}></ion-icon>
+                </div>
+                <p className="text">{item.name}</p>
+              </a>
+            </li>
+          ))}
+          
+          <div className="indicator" ref={indicatorRef}></div>
+        </div>
+
+        <li className="item logout-item" onClick={onLogout}>
+          <a href="#">
+            <div className="icon">
+              <ion-icon name="log-out-outline"></ion-icon>
+            </div>
+            <p className="text">Déconnexion</p>
+          </a>
+        </li>
+      </ul>
+    </aside>
+  );
+}
+
+export default Sidebar;
+
+
+### useNotification.jsx ###
+
+import { useState } from 'react';
+
+const useNotification = () => {
+  const [notification, setNotification] = useState(null);
+
+  const showNotification = (message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => {
+      setNotification(null);
+    }, 3000);
+  };
+
+  return { notification, showNotification };
+};
+
+export default useNotification;
+
+
+### api.js ###
+
+// frontend/src/services/api.js
+import axios from 'axios';
+
+const API = axios.create({
+  baseURL: 'http://localhost:3001/api',
+  timeout: 10000,
+});
+
+// Intercepteur pour ajouter le token
+API.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Intercepteur pour gérer les erreurs globalement
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token expiré ou invalide
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/';
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default API;
+
+
+### constants.js ###
+
+export const API_URL = 'http://localhost:3001/api';
+
+export const ROUTES = {
+  LOGIN: '/auth/login',
+  REGISTER: '/auth/register',
+};
+
+export const ROLES = {
+  ADMIN: 'admin',
+  USER: 'user',
+};
+
+
+### helpers.js ###
+
+/**
+ * IMPORTANT: Ces fonctions utilisent localStorage.
+ * Si ce code est utilisé dans un artifact Claude.ai, 
+ * remplacer par React state (useState/useReducer)
+ */
+
+export const setUserData = (userData) => {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    localStorage.setItem('user', JSON.stringify(userData));
+  }
+};
+
+export const getUserData = () => {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const user = localStorage.getItem('user');
+    return user ? JSON.parse(user) : null;
+  }
+  return null;
+};
+
+export const clearUserData = () => {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+  }
+};
+
+
+### App.css ###
+
+/* frontend/src/App.css */
+
+/* Layout pour la page d'authentification */
+.App-auth-layout {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* Layout pour le dashboard */
+.App-dashboard-layout {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Reset global */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+
+### App.jsx ###
+
+// frontend/src/App.jsx
+import React, { useState, useEffect } from 'react';
+import AuthForm from './components/AuthForm/AuthForm';
+import DashboardPage from './components/DashboardPage/DashboardPage';
+import './App.css';
+
+function App() {
+  // Vérifier si l'utilisateur est connecté au chargement
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Récupérer le thème sauvegardé ou utiliser 'light' par défaut
+  const [theme, setTheme] = useState(
+    localStorage.getItem('theme') || 'light'
+  );
+
+  // Vérifier l'authentification au chargement
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      setIsAuthenticated(true);
+    }
+    setIsLoading(false);
+  }, []);
+
+  // Appliquer le thème au chargement et aux changements
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  // Fonction pour changer de thème
+  const toggleTheme = () => {
+    setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
+  };
+
+  // Fonction appelée après une connexion réussie
+  const handleLoginSuccess = () => {
+    setIsAuthenticated(true);
+  };
+
+  // Fonction de déconnexion
+  const handleLogout = () => {
+    // Supprimer le token et les données utilisateur
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    
+    // Mettre à jour l'état
+    setIsAuthenticated(false);
+    
+    console.log('Déconnexion réussie');
+  };
+
+  // Afficher un loader pendant la vérification
+  if (isLoading) {
+    return <div className="App-loading">Chargement...</div>;
+  }
+
+  // Afficher AuthForm ou Dashboard selon l'état d'authentification
+  return (
+    <div className="App">
+      {!isAuthenticated ? (
+        <div className="App-auth-layout">
+          <AuthForm onLoginSuccess={handleLoginSuccess} />
+        </div>
+      ) : (
+        <DashboardPage 
+          onLogout={handleLogout} 
+          toggleTheme={toggleTheme}
+          isDarkTheme={theme === 'dark'}
+        />
+      )}
+    </div>
+  );
+}
+
+export default App;
+
+
+### index.css ###
+
+/* frontend/src/index.css */
+
+/* Définition des variables de thème */
+:root {
+  /* Thème clair (par défaut) */
+  --primary: #763fee;
+  --secondary: #fff;
+  --icons: #fff;
+  --background: #f5f5f5;
+  --text-color: #333;
+  
+  font-family: "Poppins", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thème sombre */
+:root[data-theme="dark"] {
+  --primary: #763fee;
+  --secondary: #1e1e1e;
+  --icons: #fff;
+  --background: #0d0d0d;
+  --text-color: #e0e0e0;
+}
+
+/* Autre exemple de thème bleu */
+:root[data-theme="blue"] {
+  --primary: #1e90ff;
+  --secondary: #fff;
+  --icons: #fff;
+  --background: #f0f8ff;
+  --text-color: #333;
+}
+
+/* Taille de base pour rem */
+html {
+  font-size: 62.5%; /* 1rem = 10px */
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--background);
+  color: var(--text-color);
+  transition: background-color 0.3s, color 0.3s;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+
+a:hover {
+  color: #535bf2;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+
+button:hover {
+  border-color: #646cff;
+}
+
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+/* Style pour le loader */
+.App-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-size: 2rem;
+  color: var(--text-color);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  
+  a:hover {
+    color: #747bff;
+  }
+  
+  button {
+    background-color: #f9f9f9;
+    color: #213547;
+  }
+}
+
+
+### main.jsx ###
+
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+### index.html ###
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PRIRTEM - Gestion Carburant</title>
+
+    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+  
+  <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+  <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
