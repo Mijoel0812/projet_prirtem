@@ -4,6 +4,7 @@ import './DriversManager.css';
 
 const DriversManager = () => {
   const [drivers, setDrivers] = useState([]);
+  const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
     first_name: '',
     last_name: '',
@@ -11,6 +12,8 @@ const DriversManager = () => {
     phone: ''
   });
   const [loading, setLoading] = useState(false);
+
+  const toggleForm = () => setShowForm(!showForm);
 
   // Charger la liste au montage
   useEffect(() => {
@@ -22,7 +25,7 @@ const DriversManager = () => {
       const res = await api.get('/drivers');
       setDrivers(res.data);
     } catch (err) {
-      console.error("Erreur lors du chargement des chauffeurs", err);
+      console.error("Erreur chargement chauffeurs", err);
     }
   };
 
@@ -35,8 +38,8 @@ const DriversManager = () => {
     setLoading(true);
     try {
       await api.post('/drivers', formData);
-      // Réinitialiser le formulaire et recharger la liste
       setFormData({ first_name: '', last_name: '', license_number: '', phone: '' });
+      setShowForm(false);
       fetchDrivers();
     } catch (err) {
       alert(err.response?.data?.message || "Erreur lors de l'ajout");
@@ -46,12 +49,12 @@ const DriversManager = () => {
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm("Voulez-vous vraiment supprimer ce chauffeur ?")) {
+    if (window.confirm("Voulez-vous supprimer ce chauffeur ?")) {
       try {
         await api.delete(`/drivers/${id}`);
-        fetchDrivers(); // Rafraîchir la liste
+        fetchDrivers();
       } catch (err) {
-        alert("Impossible de supprimer (peut-être lié à un véhicule ?)");
+        alert("Impossible de supprimer.");
       }
     }
   };
@@ -61,53 +64,78 @@ const DriversManager = () => {
       <div className="header-section">
         <h2>Gestion des Chauffeurs</h2>
       </div>
-      
-      {/* Formulaire d'ajout */}
-      <div className="driver-form-card">
-        <h3>Nouveau Chauffeur</h3>
-        <form onSubmit={handleSubmit} className="driver-form">
-          <div className="form-row">
-            <input 
-              type="text" 
-              name="first_name" 
-              placeholder="Prénom" 
-              value={formData.first_name} 
-              onChange={handleChange} 
-              required 
-            />
-            <input 
-              type="text" 
-              name="last_name" 
-              placeholder="Nom" 
-              value={formData.last_name} 
-              onChange={handleChange} 
-              required 
-            />
-          </div>
-          <div className="form-row">
-            <input 
-              type="text" 
-              name="license_number" 
-              placeholder="Numéro de Permis" 
-              value={formData.license_number} 
-              onChange={handleChange} 
-              required 
-            />
-            <input 
-              type="tel" 
-              name="phone" 
-              placeholder="Téléphone" 
-              value={formData.phone} 
-              onChange={handleChange} 
-            />
-          </div>
-          <button type="submit" className="btn-add" disabled={loading}>
-            {loading ? 'Ajout...' : 'Ajouter le Chauffeur'}
-          </button>
-        </form>
-      </div>
 
-      {/* Liste des chauffeurs */}
+      <button className="btn-toggle-form" onClick={toggleForm}>
+        {showForm ? 'Fermer' : 'Ajout'}
+      </button>
+      
+      {showForm && (
+        <div className="modal-overlay" onClick={toggleForm}>
+          <div className="modal-content is-focused" onClick={e => e.stopPropagation()}>
+            <div className="card-header">
+              <h3>Nouveau Chauffeur</h3>
+            </div>
+            
+            {/* Formulaire stylisé comme AuthForm */}
+            <form onSubmit={handleSubmit} className="styled-form"> 
+              <div className="form-row">
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="first_name" 
+                    value={formData.first_name} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Prénom</label>
+                  <i className='bx bxs-user'></i>
+                </div>
+                
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="last_name" 
+                    value={formData.last_name} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Nom</label>
+                  <i className='bx bxs-user-detail'></i>
+                </div>
+              </div>
+
+              <div className="input-box">
+                <input 
+                  type="text" 
+                  name="license_number" 
+                  value={formData.license_number} 
+                  onChange={handleChange} 
+                  required 
+                />
+                <label>Numéro de Permis</label>
+                <i className='bx bxs-id-card'></i>
+              </div>
+
+              <div className="input-box">
+                <input 
+                  type="tel" 
+                  name="phone" 
+                  value={formData.phone} 
+                  onChange={handleChange} 
+                  required 
+                />
+                <label>Téléphone</label>
+                <i className='bx bxs-phone'></i>
+              </div>
+
+              <button type="submit" className="btn-add-modal" disabled={loading}>
+                {loading ? 'Enregistrement...' : 'Enregistrer le Chauffeur'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="drivers-list-card">
         <h3>Effectif ({drivers.length})</h3>
         <div className="table-responsive">
@@ -123,7 +151,7 @@ const DriversManager = () => {
             </thead>
             <tbody>
               {drivers.length === 0 ? (
-                <tr><td colSpan="5" style={{textAlign: 'center'}}>Aucun chauffeur enregistré</td></tr>
+                <tr><td colSpan="5" style={{textAlign: 'center'}}>Aucun chauffeur</td></tr>
               ) : (
                 drivers.map(driver => (
                   <tr key={driver.id}>
@@ -135,11 +163,7 @@ const DriversManager = () => {
                     </td>
                     <td>{driver.license_number}</td>
                     <td>{driver.phone || '-'}</td>
-                    <td>
-                      <span className={`status-badge ${driver.status === 'Actif' ? 'active' : 'inactive'}`}>
-                        {driver.status}
-                      </span>
-                    </td>
+                    <td><span className={`status-badge ${driver.status === 'Actif' ? 'active' : 'inactive'}`}>{driver.status}</span></td>
                     <td>
                       <button className="btn-icon delete" onClick={() => handleDelete(driver.id)}>
                         <ion-icon name="trash-outline"></ion-icon>

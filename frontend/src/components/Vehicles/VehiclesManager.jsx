@@ -1,12 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
-import './VehiclesManager.css'; 
+import './VehiclesManager.css';
 
 const VehiclesManager = () => {
   const [vehicles, setVehicles] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  
   const [formData, setFormData] = useState({
     license_plate: '', brand: '', model: '', fuel_type: 'Diesel'
   });
+
+  const toggleForm = () => setShowForm(!showForm);
+
+  const handleChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
 
   useEffect(() => {
     fetchVehicles();
@@ -23,61 +32,103 @@ const VehiclesManager = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
     try {
       await api.post('/vehicles', formData);
       setFormData({ license_plate: '', brand: '', model: '', fuel_type: 'Diesel' });
-      fetchVehicles(); // Recharger la liste pour voir le nouvel ajout
+      setShowForm(false);
+      fetchVehicles(); 
     } catch (err) {
       alert("Erreur lors de l'ajout du véhicule");
-      console.error("Erreur POST", err);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm("Êtes-vous sûr de vouloir supprimer ce véhicule ?")) {
+    if (window.confirm("Supprimer ce véhicule ?")) {
       try {
         await api.delete(`/vehicles/${id}`);
         fetchVehicles(); 
       } catch (err) {
         alert("Erreur lors de la suppression");
-        console.error("Erreur DELETE", err);
       }
     }
   };
 
   return (
     <div className="crud-container">
-      
       <h2>Gestion des Véhicules</h2>
+
+      <button className="btn-toggle-form" onClick={toggleForm}>
+        {showForm ? 'Fermer' : 'Ajout'}
+      </button>
       
-      <form onSubmit={handleSubmit} className="crud-form">
-        <input 
-          placeholder="Immatriculation" 
-          value={formData.license_plate}
-          onChange={(e) => setFormData({...formData, license_plate: e.target.value})}
-          required 
-        />
-        <input 
-          placeholder="Marque" 
-          value={formData.brand}
-          onChange={(e) => setFormData({...formData, brand: e.target.value})}
-          required 
-        />
-        <input 
-          placeholder="Modèle" 
-          value={formData.model}
-          onChange={(e) => setFormData({...formData, model: e.target.value})}
-          required 
-        />
-        <select 
-          value={formData.fuel_type}
-          onChange={(e) => setFormData({...formData, fuel_type: e.target.value})}
-        >
-          <option value="Diesel">Diesel</option>
-          <option value="Essence">Essence</option>
-        </select>
-        <button type="submit">Ajouter</button>
-      </form>
+      {showForm && (
+        <div className="modal-overlay" onClick={toggleForm}>
+          <div className="modal-content is-focused" onClick={e => e.stopPropagation()}>
+            <div className="card-header">
+              <h3>Nouveau Véhicule</h3>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="styled-form"> 
+              <div className="input-box">
+                <input 
+                  type="text" 
+                  name="license_plate" 
+                  value={formData.license_plate} 
+                  onChange={handleChange} 
+                  required 
+                />
+                <label>Plaque d'immatriculation</label>
+                <i className='bx bxs-card'></i>
+              </div>
+
+              <div className="form-row">
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="brand" 
+                    value={formData.brand} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Marque</label>
+                  <i className='bx bxs-car'></i>
+                </div>
+                
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="model" 
+                    value={formData.model} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Modèle</label>
+                  <i className='bx bxs-car-mechanic'></i>
+                </div>
+              </div>
+
+              {/* Select Box stylisé custom */}
+              <div className="input-box select-box">
+                <select name="fuel_type" value={formData.fuel_type} onChange={handleChange}>
+                  <option value="Diesel">Diesel</option>
+                  <option value="Essence">Essence</option>
+                  <option value="Hybride">Hybride</option>
+                  <option value="Electrique">Électrique</option>
+                </select>
+                <label className="static-label">Carburant</label>
+                <i className='bx bxs-gas-pump'></i>
+              </div>
+
+              <button type="submit" className="btn-add-modal" disabled={loading}>
+                {loading ? 'Création...' : 'Créer le Véhicule'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       <table className="crud-table">
         <thead>
@@ -90,7 +141,7 @@ const VehiclesManager = () => {
         </thead>
         <tbody>
           {vehicles.length === 0 ? (
-             <tr><td colSpan="4">Aucun véhicule enregistré.</td></tr>
+             <tr><td colSpan="4">Aucun véhicule.</td></tr>
           ) : (
             vehicles.map(v => (
               <tr key={v.id}> 
@@ -102,7 +153,7 @@ const VehiclesManager = () => {
                     Supprimer
                   </button>
                 </td>
-              </tr>
+               </tr>
             ))
           )}
         </tbody>

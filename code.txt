@@ -9,14 +9,20 @@ projet_prirtem/
 │   ├── server.js                     <-- Point d'entrée du serveur Express
 │   ├── src/
 │   │   ├── controllers/
-│   │   │   └── authController.js     <-- Gestion de l'authentification (login, register)
+│   │   │   ├── authController.js     <-- Gestion de l'authentification (login, register)
+│   │   │   ├── driveController.js    <-- Gestion des conducteurs
+│   │   │   ├── profileController.js  <-- Gestion des profils utilisateurs
+│   │   │   └── vehicleController.js <-- Gestion des véhicules
 │   │   ├── db/
 │   │   │   ├── db.js                 <-- Connexion PostgreSQL
-│   │   │   └── init.sql              <-- Script SQL d'initialisation (tables users)
+│   │   │   └── init.sql              <-- Script SQL d'initialisation (tables users, profiles, vehicles, drivers)
 │   │   ├── middleware/
 │   │   │   └── authMiddleware.js     <-- Middleware JWT pour protéger les routes
 │   │   └── routes/
-│   │       └── authRoutes.js         <-- Routes d'authentification (/api/auth)
+│   │       ├── authRoutes.js         <-- Routes d'authentification (/api/auth)
+│   │       ├── driverRoutes.js       <-- Routes pour les conducteurs (/api/drivers)
+│   │       ├── profileRoutes.js      <-- Routes pour les profils (/api/profile)
+│   │       └── vehicleRoutes.js      <-- Routes pour les véhicules (/api/vehicles)
 │
 ├── frontend/ (Application React/Vite)
 │   ├── node_modules/
@@ -32,9 +38,18 @@ projet_prirtem/
 │   │   │   ├── DashboardPage/
 │   │   │   │   ├── DashboardPage.jsx <-- Page principale du dashboard
 │   │   │   │   └── DashboardPage.css <-- Styles du dashboard
-│   │   │   └── Sidebar/
-│   │   │       ├── Sidebar.jsx       <-- Barre latérale de navigation
-│   │   │       └── Sidebar.css       <-- Styles de la sidebar
+│   │   │   ├── Drivers/
+│   │   │   │   ├── DriversManager.jsx <-- Gestionnaire des conducteurs
+│   │   │   │   └── DriversManager.css <-- Styles du gestionnaire de conducteurs
+│   │   │   ├── Profile/
+│   │   │   │   ├── ProfileManager.jsx <-- Gestionnaire de profil utilisateur
+│   │   │   │   └── ProfileManager.css <-- Styles du gestionnaire de profil
+│   │   │   ├── Sidebar/
+│   │   │   │   ├── Sidebar.jsx       <-- Barre latérale de navigation
+│   │   │   │   └── Sidebar.css       <-- Styles de la sidebar
+│   │   │   └── Vehicles/
+│   │   │       ├── VehiclesManager.jsx <-- Gestionnaire des véhicules
+│   │   │       └── VehiclesManager.css <-- Styles du gestionnaire de véhicules
 │   │   ├── hooks/
 │   │   │   └── useNotification.jsx   <-- Hook personnalisé pour les notifications
 │   │   ├── services/
@@ -53,7 +68,9 @@ projet_prirtem/
 │   ├── package-lock.json
 │   └── README.md
 │
+├── code.txt                           <-- Documentation de la structure du projet
 └── README.md                          <-- Documentation du projet
+
 
 ### init.sql ###
 
@@ -74,6 +91,39 @@ CREATE TABLE users (
     username VARCHAR(100) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table Profils (Liée à l'utilisateur connecté)
+CREATE TABLE profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    full_name VARCHAR(150),
+    phone VARCHAR(20),
+    address TEXT,
+    avatar_url TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table Véhicules
+CREATE TABLE vehicles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    license_plate VARCHAR(20) NOT NULL UNIQUE,
+    brand VARCHAR(50) NOT NULL,
+    model VARCHAR(50) NOT NULL,
+    fuel_type VARCHAR(20) CHECK (fuel_type IN ('Essence', 'Diesel', 'Hybride', 'Electrique')),
+    status VARCHAR(20) DEFAULT 'Disponible', -- Disponible, En maintenance, En mission
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table Chauffeurs
+CREATE TABLE drivers (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    license_number VARCHAR(50) NOT NULL UNIQUE,
+    phone VARCHAR(20),
+    status VARCHAR(20) DEFAULT 'Actif',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -164,6 +214,215 @@ export const login = async (req, res) => {
 };
 
 
+### driveController.js ###
+
+import pool from '../db/db.js';
+
+// 1. Obtenir tous les chauffeurs
+export const getAllDrivers = async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM drivers ORDER BY created_at DESC");
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+};
+
+// 2. Ajouter un nouveau chauffeur
+export const createDriver = async (req, res) => {
+  const { first_name, last_name, license_number, phone } = req.body;
+
+  try {
+    // Vérifier si le numéro de permis existe déjà
+    const checkLicense = await pool.query("SELECT * FROM drivers WHERE license_number = $1", [license_number]);
+    if (checkLicense.rows.length > 0) {
+      return res.status(400).json({ message: "Ce numéro de permis existe déjà." });
+    }
+
+    const newDriver = await pool.query(
+      "INSERT INTO drivers (first_name, last_name, license_number, phone, status) VALUES ($1, $2, $3, $4, 'Actif') RETURNING *",
+      [first_name, last_name, license_number, phone]
+    );
+
+    res.status(201).json(newDriver.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ message: "Erreur lors de la création" });
+  }
+};
+
+// 3. Mettre à jour le statut d'un chauffeur (ex: Actif / En congé)
+export const updateDriverStatus = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // "Actif", "Inactif", "En mission"
+
+  try {
+    const updatedDriver = await pool.query(
+      "UPDATE drivers SET status = $1 WHERE id = $2 RETURNING *",
+      [status, id]
+    );
+
+    if (updatedDriver.rows.length === 0) {
+      return res.status(404).json({ message: "Chauffeur non trouvé" });
+    }
+
+    res.json(updatedDriver.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+};
+
+// 4. Supprimer un chauffeur
+export const deleteDriver = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query("DELETE FROM drivers WHERE id = $1", [id]);
+    res.json({ message: "Chauffeur supprimé avec succès" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+};
+
+
+### profileController.js ###
+
+import pool from '../db/db.js';
+import bcrypt from 'bcryptjs';
+
+// 1. Récupérer le profil complet
+export const getProfile = async (req, res) => {
+  try {
+    // Jointure pour récupérer l'email (table users) et les infos (table profiles)
+    const query = `
+      SELECT u.username, u.email, p.full_name, p.phone, p.address, p.avatar_url 
+      FROM users u 
+      LEFT JOIN profiles p ON u.id = p.user_id 
+      WHERE u.id = $1
+    `;
+    const result = await pool.query(query, [req.user.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Utilisateur non trouvé" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Erreur serveur");
+  }
+};
+
+// 2. Mettre à jour le profil (et l'avatar)
+export const updateProfile = async (req, res) => {
+  const { full_name, phone, address } = req.body;
+  const userId = req.user.id;
+  
+  // Gestion de l'URL de l'image
+  let avatarUrl = null;
+  if (req.file) {
+    // Construit l'URL accessible publiquement (ajustez le port/domaine si nécessaire)
+    avatarUrl = `http://localhost:3001/uploads/${req.file.filename}`;
+  }
+
+  try {
+    // Vérifier si le profil existe déjà pour cet utilisateur
+    const check = await pool.query("SELECT * FROM profiles WHERE user_id = $1", [userId]);
+
+    if (check.rows.length > 0) {
+      // UPDATE : Si l'utilisateur n'envoie pas de nouvelle image, on garde l'ancienne
+      const currentAvatar = avatarUrl || check.rows[0].avatar_url;
+      
+      await pool.query(
+        "UPDATE profiles SET full_name = $1, phone = $2, address = $3, avatar_url = $4, updated_at = CURRENT_TIMESTAMP WHERE user_id = $5",
+        [full_name, phone, address, currentAvatar, userId]
+      );
+    } else {
+      // INSERT : Premier profil créé
+      await pool.query(
+        "INSERT INTO profiles (user_id, full_name, phone, address, avatar_url) VALUES ($1, $2, $3, $4, $5)",
+        [userId, full_name, phone, address, avatarUrl]
+      );
+    }
+
+    res.json({ message: "Profil mis à jour", avatarUrl });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Erreur lors de la mise à jour");
+  }
+};
+
+// 3. Changer le mot de passe
+export const changePassword = async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.user.id;
+
+  try {
+    // Récupérer le hash actuel
+    const user = await pool.query("SELECT password_hash FROM users WHERE id = $1", [userId]);
+    
+    // Vérifier l'ancien mot de passe
+    const isMatch = await bcrypt.compare(currentPassword, user.rows[0].password_hash);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Mot de passe actuel incorrect" });
+    }
+
+    // Hacher le nouveau
+    const salt = await bcrypt.genSalt(10);
+    const newHash = await bcrypt.hash(newPassword, salt);
+
+    // Sauvegarder
+    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [newHash, userId]);
+    
+    res.json({ message: "Mot de passe modifié avec succès" });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send("Erreur serveur");
+  }
+};
+
+
+### vehicleController.js ###
+
+import pool from '../db/db.js';
+
+// Obtenir tous les véhicules
+export const getAllVehicles = async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM vehicles ORDER BY created_at DESC");
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Créer un véhicule
+export const createVehicle = async (req, res) => {
+  const { license_plate, brand, model, fuel_type } = req.body;
+  try {
+    const newVehicle = await pool.query(
+      "INSERT INTO vehicles (license_plate, brand, model, fuel_type) VALUES ($1, $2, $3, $4) RETURNING *",
+      [license_plate, brand, model, fuel_type]
+    );
+    res.status(201).json(newVehicle.rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Supprimer un véhicule
+export const deleteVehicle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query("DELETE FROM vehicles WHERE id = $1", [id]);
+    res.json({ message: "Véhicule supprimé" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+
 ### db.js ###
 
 import pg from 'pg';
@@ -223,6 +482,75 @@ router.post('/login', login);
 
 export default router;
 
+
+### driverRoutes.js ###
+
+import { Router } from 'express';
+import { getAllDrivers, createDriver, deleteDriver, updateDriverStatus } from '../controllers/driverController.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+
+const router = Router();
+
+// Toutes les routes nécessitent d'être connecté
+router.use(authenticateToken);
+
+router.get('/', getAllDrivers);
+router.post('/', createDriver);
+router.delete('/:id', deleteDriver);
+router.patch('/:id/status', updateDriverStatus); // Route pour changer juste le statut
+
+export default router;
+
+
+### profileRoutes.js ###
+
+import { Router } from 'express';
+import multer from 'multer';
+import path from 'path';
+import { getProfile, updateProfile, changePassword } from '../controllers/profileController.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+
+const router = Router();
+
+// Configuration de Multer pour stocker les images
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/'); // S'assurer que ce dossier existe à la racine Backend/
+  },
+  filename: (req, file, cb) => {
+    cb(null, `user-${Date.now()}${path.extname(file.originalname)}`);
+  }
+});
+
+const upload = multer({ storage });
+
+// Toutes les routes nécessitent une authentification
+router.use(authenticateToken);
+
+router.get('/', getProfile);
+// 'avatar' doit correspondre au nom du champ dans le FormData du frontend
+router.put('/', upload.single('avatar'), updateProfile);
+router.post('/password', changePassword);
+
+export default router;
+
+
+### vehicleRoutes.js ###
+
+import { Router } from 'express';
+import { getAllVehicles, createVehicle, deleteVehicle } from '../controllers/vehicleController.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+
+const router = Router();
+
+// Toutes les routes sont protégées par le middleware JWT
+router.get('/', authenticateToken, getAllVehicles);
+router.post('/', authenticateToken, createVehicle);
+router.delete('/:id', authenticateToken, deleteVehicle);
+
+export default router;
+
+
 ### .env ###
 
 PORT=3001
@@ -241,6 +569,10 @@ import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
 import authRoutes from './src/routes/authRoutes.js';
+import vehicleRoutes from './src/routes/vehicleRoutes.js';
+import driverRoutes from './src/routes/driverRoutes.js';
+import profileRoutes from './src/routes/profileRoutes.js';
+
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -251,7 +583,9 @@ app.use(express.json()); // Analyser le JSON des requêtes
 
 // Routes
 app.use('/api/auth', authRoutes);
-
+app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/drivers', driverRoutes);
+app.use('/api/profiles', profileRoutes);
 // Route de test
 app.get('/', (req, res) => {
   res.send('API PRIRTEM en cours d\'exécution...');
@@ -479,6 +813,362 @@ function AuthForm({ onLoginSuccess }) {
 export default AuthForm;
 
 
+### AuthForm.css ###
+
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
+
+:root{
+    --white: #fff;
+    --black: #000; 
+    --lightBulue: #17a;
+}
+
+*{
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Poppins', sans-serif;
+}
+
+/* body{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+} */
+
+.wrapper{
+    position: relative;
+    width: 750px;
+    height: 450px;
+    background: var(--white);
+    border: 2px solid var(--black);
+    border-radius: 10px;
+    box-shadow: 0 0 20px var(--black);
+    overflow: hidden;
+}
+
+
+.wrapper .form-box{
+    position: absolute;
+    top: 0;
+    width: 50%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+}
+
+.wrapper .form-box.login{
+    left: 0;
+    padding: 0 60px 0 40px;
+}
+
+.form-box h2{
+    margin-bottom: 10px;
+    position: relative;
+    font-size: 32px;
+    color: var(--black);
+    text-align: center;
+}
+
+.form-box h2.title{
+    font-size: 24px;
+    color: var(--black);
+    font-weight: 500;
+}
+
+.form-box h2::after{
+    content: "";
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 4px;
+    background: var(--black);
+}
+
+.form-box .input-box{
+    position: relative;
+    width: 100%;
+    height: 50px;
+    margin: 25px 0;
+}
+
+.input-box input{
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    color: var(--black);
+    font-size: 16px;
+    font-weight: 500;
+    border: none;
+    outline: none;
+    border-bottom: 2px solid var(--black);
+    transition: .5s;
+    padding-right: 23px;
+}
+
+.input-box input:focus,
+.input-box input:valid{
+    border-bottom-color: var(--lightBulue);
+}
+
+.input-box label{
+    position: absolute;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    font-size: 16px;
+    color: var(--black);
+    pointer-events: none;
+    transition: 0.5s;
+}
+
+
+.input-box input:focus~label,
+.input-box input:valid~label{
+    top: -5px;
+    color: var(--lightBulue);
+}
+
+
+.input-box i{
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+    font-size: 18px;
+    transition: 0.5s;
+}
+
+.input-box input:focus~i,
+.input-box input:valid~i{
+    color: var(--lightBulue);
+}
+
+form button{
+    width: 100%;
+    height: 45px;
+    background-color: var(--black);
+    color: var(--white);
+    border: none;
+    outline: none;
+    border-radius: 40px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 600;
+    transition: .3s;
+}
+
+form button:hover{
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
+}
+
+form .linkTxt{
+    font-size: 14px;
+    color: var(--black);
+    text-align: center;
+    margin: 20px 0 10px;
+}
+
+.linkTxt p a{
+    color: blue;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.wrapper .form-box.login .animation{
+    transform: translateX(0);
+    transition: 0.7s ease;
+    opacity: 1;
+    filter: blur(0);
+    transition-delay: calc(.1s * var(--j));
+}
+
+
+.wrapper.active .form-box.login .animation{
+    transform: translateX(-120%);
+    opacity: 0;
+    filter: blur(10px);
+    transition-delay: calc(.1s * var(--i));
+}
+
+
+
+
+
+
+.wrapper .info-text{
+    position: absolute;
+    top: 0;
+    width: 50%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.wrapper .info-text.login{
+    right: 0;
+    text-align: right;
+    padding: 0 40px 60px 150px;
+
+}
+
+.wrapper .info-text h2{
+    font-size: 36px;
+    color: var(--white);
+    line-height: 1.3;
+    text-transform: uppercase;
+}
+
+.wrapper .info-text p{
+    font-size: 16px;
+    color: var(--white);
+}
+
+
+.wrapper .info-text.login .animation{
+    transform: translateX(0);
+    opacity: 1;
+    filter: blur(0);
+    transition: 0.7s ease;
+    transition-delay: calc(.1s * var(--j));
+}
+.wrapper.active .info-text.login .animation{
+    transform: translateX(120px);
+    opacity: 0;
+    filter: blur(10px);
+    transition: 0.7s ease;
+    transition-delay: calc(.1s * var(--i));
+}
+
+
+
+
+
+.wrapper .rotate-bg{
+    position: absolute;
+    top: -4px;
+    right: 0;
+    width: 850px;
+    height: 600px;
+    background: #000;
+    transform: rotate(10deg) skewY(40deg);
+    transform-origin: bottom right;
+    transition: 1.5s ease;
+    transition-delay: 1.6s;
+}
+
+.wrapper.active .rotate-bg{
+    transform: rotate(0) skewY(0);
+    transition-delay: 0.5s;
+}
+
+
+
+
+
+
+
+
+
+
+
+.wrapper .form-box.register{
+    padding: 0 40px 0 60px;
+    right: 0;
+}
+
+.wrapper.active .form-box.register{
+    pointer-events: auto;
+}
+
+
+.wrapper .form-box.register .animation{
+    transform: translateX(120%);
+    opacity: 0;
+    filter: blur(10px);
+    transition: .7s ease;
+    transition-delay: calc(.1s * var(--j));
+}
+
+.wrapper.active .form-box.register .animation{
+    transform: translateX(0);
+    opacity: 1;
+    filter: blur(0);
+    transition-delay: calc(.1s * var(--i));
+}
+
+
+
+.wrapper .info-text.register{
+    left: 0;
+    text-align: left;
+    padding: 0 150px 60px 40px;
+    pointer-events: none;
+}
+
+.wrapper.active .info-text.register{
+    pointer-events: auto;
+}
+
+
+.wrapper .info-text.register .animation{
+    transform: translateX(-120%);
+    opacity: 0;
+    filter: blur(10px);
+    transition: .7s ease;
+    transition-delay: calc(.1s * var(--j));
+}
+
+.wrapper.active .info-text.register .animation{
+    transform: translateX(0);
+    opacity: 1;
+    filter: blur(0);
+    transition-delay: calc(.1s * var(--i));
+}
+
+
+
+
+.wrapper .rotate-bg2{
+    position: absolute;
+    top: 100%;
+    left: 250px;
+    width: 850px;
+    height: 700px;
+    background: var(--white);
+    transform: rotate(0) skewY(0);
+    transform-origin: bottom left;
+    transition: 1.5s ease;
+    transition-delay: 0.5s;
+}
+
+.wrapper.active .rotate-bg2{
+    transform: rotate(-11deg) skewY(-40deg);
+    transition-delay: 1.2s;
+}
+/* Style pour les messages d'erreur */
+.error-message {
+  color: #d32f2f;
+  background-color: #ffebee;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+  text-align: center;
+  font-size: 14px;
+  border: 1px solid #ef9a9a;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+
 ### DashboardPage.css ###
 
 /* frontend/src/components/DashboardPage/DashboardPage.css */
@@ -528,25 +1218,54 @@ export default AuthForm;
 
 ### DashboardPage.jsx ###
 
-import React from 'react';
+import React, { useState } from 'react';
 import Sidebar from '../Sidebar/Sidebar';
+import VehiclesManager from '../Vehicles/VehiclesManager';
+import DriversManager from '../Drivers/DriversManager';
+import ProfileManager from '../Profile/ProfileManager';
 import './DashboardPage.css';
 
 function DashboardPage({ onLogout, toggleTheme, isDarkTheme }) {
+  const [activeIndex, setActiveIndex] = useState(0); 
+
+  const renderContent = () => {
+    switch (activeIndex) {
+      case 0:
+        return (
+          <div>
+            <h1>Tableau de bord</h1>
+            <p>Bienvenue sur votre tableau de bord global.</p>
+          </div>
+        );
+      case 1:
+        return <ProfileManager />;
+      case 2:
+        return <VehiclesManager />;
+      case 3:
+        return <DriversManager />;
+      case 4:
+        return <h1>Rapports (À venir)</h1>;
+      case 5:
+        return <h1>Paramètres (À venir)</h1>;
+      default:
+        return <h1>Page non trouvée</h1>;
+    }
+  };
+  
   return (
     <div className="dashboard-layout">
-      <Sidebar onLogout={onLogout} /> 
+      <Sidebar 
+        onLogout={onLogout} 
+        activeIndex={activeIndex} 
+        setActiveIndex={setActiveIndex} 
+      /> 
       
-      {/* Classe "main" renommée en "dashboard-content" */}
       <main className="dashboard-content">
-        
-        {/* Bouton de Thème de sidebar.txt  */}
         <div className="theme-toggle" onClick={toggleTheme}>
           <ion-icon name={isDarkTheme ? "sunny-sharp" : "moon-sharp"}></ion-icon>
         </div>
 
-        <h1>Dashboard</h1>
-        <p>Bienvenue sur votre tableau de bord de gestion de carburant.</p>
+        {renderContent()}
         
       </main>
     </div>
@@ -554,6 +1273,681 @@ function DashboardPage({ onLogout, toggleTheme, isDarkTheme }) {
 }
 
 export default DashboardPage;
+
+
+### DriversManager.jsx ###
+
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
+import './DriversManager.css';
+
+const DriversManager = () => {
+  const [drivers, setDrivers] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState({
+    first_name: '',
+    last_name: '',
+    license_number: '',
+    phone: ''
+  });
+  const [loading, setLoading] = useState(false);
+
+  const toggleForm = () => setShowForm(!showForm);
+
+  // Charger la liste au montage
+  useEffect(() => {
+    fetchDrivers();
+  }, []);
+
+  const fetchDrivers = async () => {
+    try {
+      const res = await api.get('/drivers');
+      setDrivers(res.data);
+    } catch (err) {
+      console.error("Erreur chargement chauffeurs", err);
+    }
+  };
+
+  const handleChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      await api.post('/drivers', formData);
+      setFormData({ first_name: '', last_name: '', license_number: '', phone: '' });
+      setShowForm(false);
+      fetchDrivers();
+    } catch (err) {
+      alert(err.response?.data?.message || "Erreur lors de l'ajout");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (window.confirm("Voulez-vous supprimer ce chauffeur ?")) {
+      try {
+        await api.delete(`/drivers/${id}`);
+        fetchDrivers();
+      } catch (err) {
+        alert("Impossible de supprimer.");
+      }
+    }
+  };
+
+  return (
+    <div className="drivers-container">
+      <div className="header-section">
+        <h2>Gestion des Chauffeurs</h2>
+      </div>
+
+      <button className="btn-toggle-form" onClick={toggleForm}>
+        {showForm ? 'Fermer' : 'Ajout'}
+      </button>
+      
+      {showForm && (
+        <div className="modal-overlay" onClick={toggleForm}>
+          <div className="modal-content is-focused" onClick={e => e.stopPropagation()}>
+            <div className="card-header">
+              <h3>Nouveau Chauffeur</h3>
+            </div>
+            
+            {/* Formulaire stylisé comme AuthForm */}
+            <form onSubmit={handleSubmit} className="styled-form"> 
+              <div className="form-row">
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="first_name" 
+                    value={formData.first_name} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Prénom</label>
+                  <i className='bx bxs-user'></i>
+                </div>
+                
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="last_name" 
+                    value={formData.last_name} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Nom</label>
+                  <i className='bx bxs-user-detail'></i>
+                </div>
+              </div>
+
+              <div className="input-box">
+                <input 
+                  type="text" 
+                  name="license_number" 
+                  value={formData.license_number} 
+                  onChange={handleChange} 
+                  required 
+                />
+                <label>Numéro de Permis</label>
+                <i className='bx bxs-id-card'></i>
+              </div>
+
+              <div className="input-box">
+                <input 
+                  type="tel" 
+                  name="phone" 
+                  value={formData.phone} 
+                  onChange={handleChange} 
+                  required 
+                />
+                <label>Téléphone</label>
+                <i className='bx bxs-phone'></i>
+              </div>
+
+              <button type="submit" className="btn-add-modal" disabled={loading}>
+                {loading ? 'Enregistrement...' : 'Enregistrer le Chauffeur'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <div className="drivers-list-card">
+        <h3>Effectif ({drivers.length})</h3>
+        <div className="table-responsive">
+          <table>
+            <thead>
+              <tr>
+                <th>Nom Complet</th>
+                <th>Permis</th>
+                <th>Téléphone</th>
+                <th>Statut</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drivers.length === 0 ? (
+                <tr><td colSpan="5" style={{textAlign: 'center'}}>Aucun chauffeur</td></tr>
+              ) : (
+                drivers.map(driver => (
+                  <tr key={driver.id}>
+                    <td className="driver-name">
+                      <div className="avatar-placeholder">
+                        {driver.first_name[0]}{driver.last_name[0]}
+                      </div>
+                      {driver.first_name} {driver.last_name}
+                    </td>
+                    <td>{driver.license_number}</td>
+                    <td>{driver.phone || '-'}</td>
+                    <td><span className={`status-badge ${driver.status === 'Actif' ? 'active' : 'inactive'}`}>{driver.status}</span></td>
+                    <td>
+                      <button className="btn-icon delete" onClick={() => handleDelete(driver.id)}>
+                        <ion-icon name="trash-outline"></ion-icon>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DriversManager;
+
+
+### DriversManager.css ###
+
+/* --- Styles existants pour la table --- */
+.drivers-container { padding: 1rem; color: var(--text-color); }
+.table-responsive { overflow-x: auto; margin-top: 1rem; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 1rem; border-bottom: 1px solid rgba(0,0,0,0.1); }
+.driver-name { display: flex; align-items: center; gap: 1rem; font-weight: 500; }
+.avatar-placeholder { width: 30px; height: 30px; background-color: var(--primary); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; text-transform: uppercase; }
+.status-badge { padding: 0.2rem 0.6rem; border-radius: 1rem; font-size: 0.8rem; }
+.status-badge.active { background-color: #e1f9e1; color: #2ecc71; }
+.status-badge.inactive { background-color: #ffecec; color: #e74c3c; }
+.btn-icon.delete { background-color: #ffecec; color: #e74c3c; width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; border-radius: 50%; border: none; cursor: pointer; }
+.btn-toggle-form { background-color: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+
+/* --- Styles MODAL & FORMULAIRE (Style AuthForm répliqué) --- */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex; justify-content: center; align-items: center; z-index: 1000;
+}
+
+.modal-content {
+  background: var(--secondary);
+  color: var(--text-color);
+  border-radius: 10px;
+  padding: 30px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  border: 2px solid var(--primary); /* Bordure violette pour rappeler le thème */
+}
+
+.card-header h3 {
+  text-align: center;
+  font-size: 24px;
+  color: var(--text-color);
+  margin-bottom: 20px;
+}
+
+/* STYLE DES CHAMPS (INPUT BOX) */
+.input-box {
+  position: relative;
+  width: 100%;
+  height: 50px;
+  margin: 25px 0;
+}
+
+.form-row {
+  display: flex;
+  gap: 15px;
+}
+.form-row .input-box {
+  margin: 15px 0; /* Un peu moins de marge si côte à côte */
+}
+
+.input-box input {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--text-color);
+  font-size: 16px;
+  font-weight: 500;
+  border: none;
+  outline: none;
+  border-bottom: 2px solid var(--text-color);
+  opacity: 0.5; /* Ligne un peu plus discrète par défaut */
+  transition: .5s;
+  padding-right: 23px;
+}
+
+.input-box input:focus,
+.input-box input:valid {
+  border-bottom-color: var(--primary);
+  opacity: 1;
+}
+
+.input-box label {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  font-size: 16px;
+  color: var(--text-color);
+  pointer-events: none;
+  transition: 0.5s;
+}
+
+.input-box input:focus ~ label,
+.input-box input:valid ~ label {
+  top: -5px;
+  color: var(--primary);
+}
+
+.input-box i {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  font-size: 18px;
+  color: var(--text-color);
+  transition: 0.5s;
+}
+
+.input-box input:focus ~ i,
+.input-box input:valid ~ i {
+  color: var(--primary);
+}
+
+.btn-add-modal {
+  width: 100%;
+  height: 45px;
+  background-color: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 40px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  transition: .3s;
+  margin-top: 10px;
+}
+
+.btn-add-modal:hover {
+  box-shadow: 0 0 10px rgba(118, 63, 238, 0.5);
+}
+
+
+### ProfileManager.css ###
+
+.profile-container {
+    padding: 20px;
+    color: var(--text-color);
+  }
+  
+  .profile-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 20px;
+    margin-top: 20px;
+  }
+  
+  @media (max-width: 900px) {
+    .profile-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  
+  .card {
+    background: var(--secondary);
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  }
+  
+  .card-header h3 {
+    margin-top: 0;
+    color: var(--primary);
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+  
+  /* Avatar Styles */
+  .avatar-wrapper {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 30px;
+  }
+  
+  .avatar-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 4px solid var(--primary);
+  }
+  
+  .avatar-edit-btn {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    background: var(--primary);
+    color: white;
+    width: 35px;
+    height: 35px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: transform 0.2s;
+  }
+  
+  .avatar-edit-btn:hover {
+    transform: scale(1.1);
+  }
+  
+  /* Form Styles */
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+  }
+  
+  .input-group {
+    margin-bottom: 15px;
+  }
+  
+  .input-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+  
+  .input-group input,
+  .input-group textarea {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    background: var(--background);
+    color: var(--text-color);
+    transition: border 0.3s;
+  }
+  
+  .input-group input:focus,
+  .input-group textarea:focus {
+    border-color: var(--primary);
+    outline: none;
+  }
+  
+  .input-group input.disabled {
+    background-color: rgba(0,0,0,0.05);
+    cursor: not-allowed;
+    color: #888;
+  }
+  
+  /* Buttons */
+  button {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  
+  .btn-primary {
+    background-color: var(--primary);
+    color: white;
+  }
+  
+  .btn-warning {
+    background-color: #f59e0b; /* Orange */
+    color: white;
+  }
+  
+  button:hover {
+    opacity: 0.9;
+  }
+
+
+### ProfileManager.jsx ###
+
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
+import './ProfileManager.css';
+
+const ProfileManager = () => {
+  const [loading, setLoading] = useState(true);
+  
+  // Données du profil
+  const [profile, setProfile] = useState({
+    username: '', email: '', full_name: '', phone: '', address: '', avatar_url: ''
+  });
+  
+  // Gestion image
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+
+  // Gestion mot de passe
+  const [passwords, setPasswords] = useState({
+    currentPassword: '', newPassword: '', confirmPassword: ''
+  });
+
+  useEffect(() => {
+    fetchProfile();
+  }, []);
+
+  const fetchProfile = async () => {
+    try {
+      const res = await api.get('/profile');
+      setProfile({
+        ...res.data,
+        full_name: res.data.full_name || '',
+        phone: res.data.phone || '',
+        address: res.data.address || ''
+      });
+    } catch (err) {
+      console.error("Erreur chargement profil", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setSelectedFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  const handleInfoSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Utilisation de FormData pour envoyer texte + fichier
+    const formData = new FormData();
+    formData.append('full_name', profile.full_name);
+    formData.append('phone', profile.phone);
+    formData.append('address', profile.address);
+    if (selectedFile) {
+      formData.append('avatar', selectedFile);
+    }
+
+    try {
+      const res = await api.put('/profile', formData);
+      alert("Profil mis à jour !");
+      // Mettre à jour l'avatar affiché
+      if (res.data.avatarUrl) {
+        setProfile(prev => ({ ...prev, avatar_url: res.data.avatarUrl }));
+      }
+    } catch (err) {
+      alert("Erreur lors de la mise à jour.");
+    }
+  };
+
+  const handlePasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (passwords.newPassword !== passwords.confirmPassword) {
+      return alert("Les mots de passe ne correspondent pas.");
+    }
+    if (passwords.newPassword.length < 6) {
+      return alert("Le mot de passe doit faire au moins 6 caractères.");
+    }
+
+    try {
+      await api.post('/profile/password', {
+        currentPassword: passwords.currentPassword,
+        newPassword: passwords.newPassword
+      });
+      alert("Mot de passe modifié !");
+      setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (err) {
+      alert(err.response?.data?.message || "Erreur serveur");
+    }
+  };
+
+  if (loading) return <div className="loading-spinner">Chargement...</div>;
+
+  return (
+    <div className="profile-container">
+      <h2>Mon Profil</h2>
+      
+      <div className="profile-grid">
+        {/* Carte Informations */}
+        <div className="card info-card">
+          <div className="card-header">
+            <h3>Informations Personnelles</h3>
+          </div>
+          
+          <form onSubmit={handleInfoSubmit}>
+            <div className="avatar-wrapper">
+              <img 
+                src={previewUrl || profile.avatar_url || "https://via.placeholder.com/150"} 
+                alt="Avatar" 
+                className="avatar-img"
+              />
+              <label htmlFor="avatar-upload" className="avatar-edit-btn">
+                <ion-icon name="camera-reverse"></ion-icon>
+              </label>
+              <input 
+                id="avatar-upload" 
+                type="file" 
+                onChange={handleFileChange} 
+                accept="image/*" 
+                hidden 
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="input-group">
+                <label>Nom d'utilisateur</label>
+                <input type="text" value={profile.username} disabled className="disabled" />
+              </div>
+              <div className="input-group">
+                <label>Email</label>
+                <input type="email" value={profile.email} disabled className="disabled" />
+              </div>
+            </div>
+
+            <div className="input-group">
+              <label>Nom Complet</label>
+              <input 
+                type="text" 
+                value={profile.full_name}
+                onChange={(e) => setProfile({...profile, full_name: e.target.value})}
+                placeholder="Votre nom complet"
+              />
+            </div>
+
+            <div className="input-group">
+              <label>Téléphone</label>
+              <input 
+                type="text" 
+                value={profile.phone}
+                onChange={(e) => setProfile({...profile, phone: e.target.value})}
+                placeholder="034 00 000 00"
+              />
+            </div>
+
+            <div className="input-group">
+              <label>Adresse</label>
+              <textarea 
+                value={profile.address}
+                onChange={(e) => setProfile({...profile, address: e.target.value})}
+                placeholder="Votre adresse..."
+                rows="3"
+              ></textarea>
+            </div>
+
+            <button type="submit" className="btn-primary">Enregistrer les modifications</button>
+          </form>
+        </div>
+
+        {/* Carte Sécurité */}
+        <div className="card security-card">
+          <div className="card-header">
+            <h3>Sécurité</h3>
+          </div>
+          
+          <form onSubmit={handlePasswordSubmit}>
+            <div className="input-group">
+              <label>Mot de passe actuel</label>
+              <input 
+                type="password" 
+                value={passwords.currentPassword}
+                onChange={(e) => setPasswords({...passwords, currentPassword: e.target.value})}
+                required
+              />
+            </div>
+
+            <div className="input-group">
+              <label>Nouveau mot de passe</label>
+              <input 
+                type="password" 
+                value={passwords.newPassword}
+                onChange={(e) => setPasswords({...passwords, newPassword: e.target.value})}
+                required
+              />
+            </div>
+
+            <div className="input-group">
+              <label>Confirmer le mot de passe</label>
+              <input 
+                type="password" 
+                value={passwords.confirmPassword}
+                onChange={(e) => setPasswords({...passwords, confirmPassword: e.target.value})}
+                required
+              />
+            </div>
+
+            <button type="submit" className="btn-warning">Modifier le mot de passe</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ProfileManager;
 
 
 ### Sidebar.css ###
@@ -780,9 +2174,8 @@ const menuConfig = [
   { name: "Parametre", icon: "cog-sharp" },
 ];
 
-function Sidebar({ onLogout }) {
+function Sidebar({ onLogout, activeIndex, setActiveIndex }) {
   const [isSidebarActive, setIsSidebarActive] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
   
   const indicatorRef = useRef(null);
   const menuItemsRef = useRef([]);
@@ -888,6 +2281,282 @@ function Sidebar({ onLogout }) {
 }
 
 export default Sidebar;
+
+
+### VehiclesManager.jsx ###
+
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
+import './VehiclesManager.css';
+
+const VehiclesManager = () => {
+  const [vehicles, setVehicles] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  
+  const [formData, setFormData] = useState({
+    license_plate: '', brand: '', model: '', fuel_type: 'Diesel'
+  });
+
+  const toggleForm = () => setShowForm(!showForm);
+
+  const handleChange = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  useEffect(() => {
+    fetchVehicles();
+  }, []);
+
+  const fetchVehicles = async () => {
+    try {
+      const res = await api.get('/vehicles');
+      setVehicles(res.data);
+    } catch (err) {
+      console.error("Erreur de chargement des véhicules", err);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      await api.post('/vehicles', formData);
+      setFormData({ license_plate: '', brand: '', model: '', fuel_type: 'Diesel' });
+      setShowForm(false);
+      fetchVehicles(); 
+    } catch (err) {
+      alert("Erreur lors de l'ajout du véhicule");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (window.confirm("Supprimer ce véhicule ?")) {
+      try {
+        await api.delete(`/vehicles/${id}`);
+        fetchVehicles(); 
+      } catch (err) {
+        alert("Erreur lors de la suppression");
+      }
+    }
+  };
+
+  return (
+    <div className="crud-container">
+      <h2>Gestion des Véhicules</h2>
+
+      <button className="btn-toggle-form" onClick={toggleForm}>
+        {showForm ? 'Fermer' : 'Ajout'}
+      </button>
+      
+      {showForm && (
+        <div className="modal-overlay" onClick={toggleForm}>
+          <div className="modal-content is-focused" onClick={e => e.stopPropagation()}>
+            <div className="card-header">
+              <h3>Nouveau Véhicule</h3>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="styled-form"> 
+              <div className="input-box">
+                <input 
+                  type="text" 
+                  name="license_plate" 
+                  value={formData.license_plate} 
+                  onChange={handleChange} 
+                  required 
+                />
+                <label>Plaque d'immatriculation</label>
+                <i className='bx bxs-card'></i>
+              </div>
+
+              <div className="form-row">
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="brand" 
+                    value={formData.brand} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Marque</label>
+                  <i className='bx bxs-car'></i>
+                </div>
+                
+                <div className="input-box">
+                  <input 
+                    type="text" 
+                    name="model" 
+                    value={formData.model} 
+                    onChange={handleChange} 
+                    required 
+                  />
+                  <label>Modèle</label>
+                  <i className='bx bxs-car-mechanic'></i>
+                </div>
+              </div>
+
+              {/* Select Box stylisé custom */}
+              <div className="input-box select-box">
+                <select name="fuel_type" value={formData.fuel_type} onChange={handleChange}>
+                  <option value="Diesel">Diesel</option>
+                  <option value="Essence">Essence</option>
+                  <option value="Hybride">Hybride</option>
+                  <option value="Electrique">Électrique</option>
+                </select>
+                <label className="static-label">Carburant</label>
+                <i className='bx bxs-gas-pump'></i>
+              </div>
+
+              <button type="submit" className="btn-add-modal" disabled={loading}>
+                {loading ? 'Création...' : 'Créer le Véhicule'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <table className="crud-table">
+        <thead>
+          <tr>
+            <th>Marque/Modèle</th>
+            <th>Plaque</th>
+            <th>Carburant</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {vehicles.length === 0 ? (
+             <tr><td colSpan="4">Aucun véhicule.</td></tr>
+          ) : (
+            vehicles.map(v => (
+              <tr key={v.id}> 
+                <td>{v.brand} {v.model}</td>
+                <td>{v.license_plate}</td>
+                <td>{v.fuel_type}</td>
+                <td>
+                  <button className="delete-btn" onClick={() => handleDelete(v.id)}>
+                    Supprimer
+                  </button>
+                </td>
+               </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+export default VehiclesManager;
+
+
+### VehiclesManager.css ###
+
+/* --- Styles existants --- */
+.crud-container { background: var(--secondary); padding: 20px; border-radius: 10px; color: var(--text-color); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+.crud-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+.crud-table th, .crud-table td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(0,0,0,0.1); }
+.delete-btn { background: #ff4d4d; padding: 8px 12px; color: white; border: none; border-radius: 4px; cursor: pointer; }
+.btn-toggle-form { background-color: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+
+/* --- NOUVEAUX STYLES MODAL & INPUTS (copiés et adaptés) --- */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex; justify-content: center; align-items: center; z-index: 1000;
+}
+
+.modal-content {
+  background: var(--secondary);
+  color: var(--text-color);
+  border-radius: 10px;
+  padding: 30px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  border: 2px solid var(--primary);
+}
+
+.card-header h3 { text-align: center; margin-bottom: 20px; color: var(--text-color); }
+
+/* STRUCTURE INPUT BOX */
+.input-box { position: relative; width: 100%; height: 50px; margin: 25px 0; }
+.form-row { display: flex; gap: 15px; }
+.form-row .input-box { margin: 15px 0; }
+
+.input-box input, 
+.input-box select {
+  width: 100%; height: 100%;
+  background: transparent;
+  color: var(--text-color);
+  font-size: 16px; font-weight: 500;
+  border: none; outline: none;
+  border-bottom: 2px solid var(--text-color);
+  opacity: 0.6;
+  transition: .5s;
+  padding-right: 23px;
+}
+
+/* Gestion du focus */
+.input-box input:focus, .input-box input:valid,
+.input-box select:focus {
+  border-bottom-color: var(--primary);
+  opacity: 1;
+}
+
+/* Labels */
+.input-box label {
+  position: absolute; top: 50%; left: 0;
+  transform: translateY(-50%);
+  font-size: 16px; color: var(--text-color);
+  pointer-events: none; transition: 0.5s;
+}
+
+/* Animation Label */
+.input-box input:focus ~ label,
+.input-box input:valid ~ label {
+  top: -5px; color: var(--primary);
+}
+
+/* Icons */
+.input-box i {
+  position: absolute; top: 50%; right: 0;
+  transform: translateY(-50%);
+  font-size: 18px; color: var(--text-color);
+  transition: 0.5s;
+}
+.input-box input:focus ~ i, .input-box input:valid ~ i, .input-box select:focus ~ i {
+  color: var(--primary);
+}
+
+/* Spécifique pour le SELECT qui a besoin que le label reste en haut */
+.input-box.select-box label.static-label {
+  top: -5px;
+  color: var(--primary);
+  font-size: 14px;
+}
+.input-box select {
+  padding-top: 10px; /* Espace pour le texte */
+}
+/* Pour les options du select (fond sombre si dark mode) */
+.input-box select option {
+  background-color: var(--secondary);
+  color: var(--text-color);
+}
+
+/* Bouton */
+.btn-add-modal {
+  width: 100%; height: 45px;
+  background-color: var(--primary);
+  color: #fff;
+  border: none; border-radius: 40px;
+  cursor: pointer; font-size: 16px; font-weight: 600;
+  transition: .3s; margin-top: 10px;
+}
+
+.btn-add-modal:hover { box-shadow: 0 0 10px rgba(118, 63, 238, 0.5); }
 
 
 ### useNotification.jsx ###
